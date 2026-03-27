@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
 
 type StepState = "idle" | "running" | "done" | "error";
 
@@ -58,11 +59,7 @@ export default function PipelinePage() {
   const [enrichResults, setEnrichResults] = useState<EnrichmentResult[]>([]);
   const [exaCompanies, setExaCompanies] = useState<ExaCompany[]>([]);
 
-  // Keep polling for 90s after any trigger, even though the API call returns instantly
-  const pollUntilRef = useRef<number>(0);
-
   const isAnyRunning = exaState === "running" || apolloSearchState === "running" || haikuState === "running" || apolloState === "running";
-  const shouldPoll = isAnyRunning || Date.now() < pollUntilRef.current;
 
   // Sync play name to query
   const handleQueryChange = (val: string) => {
@@ -86,22 +83,27 @@ export default function PipelinePage() {
     }
   }, [play]);
 
-  // Poll every 5s while running or within the poll window
+  // Fetch once on play change, then rely on realtime for updates
+  useEffect(() => {
+    if (!play) return;
+    fetchResults();
+  }, [play, fetchResults]);
+
+  // Subscribe to Supabase Realtime — refetch when any monitored table changes
   useEffect(() => {
     if (!play) return;
 
-    // Initial fetch
-    fetchResults();
+    const channel = supabase
+      .channel(`pipeline-${play}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "companies" }, () => fetchResults())
+      .on("postgres_changes", { event: "*", schema: "public", table: "enrichment_results" }, () => fetchResults())
+      .on("postgres_changes", { event: "*", schema: "public", table: "pipeline_step_log" }, () => fetchResults())
+      .subscribe();
 
-    const id = setInterval(() => {
-      const stillPolling = isAnyRunning || Date.now() < pollUntilRef.current;
-      if (stillPolling) {
-        fetchResults();
-      }
-    }, 5000);
-
-    return () => clearInterval(id);
-  }, [play, isAnyRunning, fetchResults]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [play, fetchResults]);
 
   async function triggerFlow(
     endpoint: string,
@@ -112,8 +114,6 @@ export default function PipelinePage() {
   ) {
     setRunState("running");
     setError(null);
-    // Keep polling for 90s after trigger
-    pollUntilRef.current = Date.now() + 90_000;
     try {
       const res = await fetch(endpoint, {
         method: "POST",
