@@ -60,6 +60,7 @@ export default function PipelinePage() {
 
   const [exaError, setExaError] = useState<string | null>(null);
   const [apolloSearchError, setApolloSearchError] = useState<string | null>(null);
+  const [apolloSearchForce, setApolloSearchForce] = useState(false);
   const [haikuError, setHaikuError] = useState<string | null>(null);
   const [apolloError, setApolloError] = useState<string | null>(null);
 
@@ -180,7 +181,7 @@ export default function PipelinePage() {
   const runExa = () =>
     triggerFlow("/api/pipeline/exa", { query, play, numResults }, setExaState, setExaRunId, setExaError);
   const runApolloSearch = () =>
-    triggerFlow("/api/pipeline/apollo-search", { play }, setApolloSearchState, setApolloSearchRunId, setApolloSearchError);
+    triggerFlow("/api/pipeline/apollo-search", { play, force: apolloSearchForce }, setApolloSearchState, setApolloSearchRunId, setApolloSearchError);
   const runHaiku = () =>
     triggerFlow("/api/pipeline/haiku", { play }, setHaikuState, setHaikuRunId, setHaikuError);
   const runApollo = () =>
@@ -281,6 +282,7 @@ export default function PipelinePage() {
             error={apolloSearchError}
             disabled={!play || isAnyRunning}
             onRun={runApolloSearch}
+            forceOption={{ value: apolloSearchForce, onChange: setApolloSearchForce }}
           />
           <FlowCard
             title="3. Haiku Screen"
@@ -402,6 +404,7 @@ function FlowCard({
   error,
   disabled,
   onRun,
+  forceOption,
 }: {
   title: string;
   description: string;
@@ -410,6 +413,7 @@ function FlowCard({
   error: string | null;
   disabled: boolean;
   onRun: () => void;
+  forceOption?: { value: boolean; onChange: (v: boolean) => void };
 }) {
   return (
     <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 flex flex-col gap-3">
@@ -417,6 +421,18 @@ function FlowCard({
         <h3 className="font-semibold">{title}</h3>
         <p className="text-sm text-zinc-500">{description}</p>
       </div>
+
+      {forceOption && (
+        <label className="flex items-center gap-2 text-xs text-zinc-500 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={forceOption.value}
+            onChange={(e) => forceOption.onChange(e.target.checked)}
+            className="rounded"
+          />
+          Force re-run
+        </label>
+      )}
 
       <button
         onClick={onRun}

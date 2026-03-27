@@ -17,7 +17,7 @@ async function getDeploymentId(name: string): Promise<string | null> {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { play } = body as { play: string };
+  const { play, force } = body as { play: string; force?: boolean };
 
   if (!play) {
     return NextResponse.json({ error: "play is required" }, { status: 400 });
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        parameters: { play },
+        parameters: { play, force: force ?? false },
       }),
     });
 
