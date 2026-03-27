@@ -35,10 +35,18 @@ interface ExaCompany {
   phone_1: string | null;
 }
 
+interface Play {
+  id: number;
+  name: string;
+  created_at: string;
+  company_count: number;
+}
+
 export default function PipelinePage() {
   const [query, setQuery] = useState("");
   const [play, setPlay] = useState("");
   const [numResults, setNumResults] = useState(25);
+  const [plays, setPlays] = useState<Play[]>([]);
 
   const [exaState, setExaState] = useState<StepState>("idle");
   const [apolloSearchState, setApolloSearchState] = useState<StepState>("idle");
@@ -61,10 +69,36 @@ export default function PipelinePage() {
 
   const isAnyRunning = exaState === "running" || apolloSearchState === "running" || haikuState === "running" || apolloState === "running";
 
+  // Load plays list
+  useEffect(() => {
+    fetch("/api/pipeline/plays")
+      .then((r) => r.ok ? r.json() : [])
+      .then(setPlays)
+      .catch(() => {});
+  }, []);
+
   // Sync play name to query
   const handleQueryChange = (val: string) => {
     setQuery(val);
     setPlay(val);
+  };
+
+  const selectPlay = (name: string) => {
+    setQuery(name);
+    setPlay(name);
+    // Reset button states when switching plays
+    setExaState("idle");
+    setApolloSearchState("idle");
+    setHaikuState("idle");
+    setApolloState("idle");
+    setExaRunId(null);
+    setApolloSearchRunId(null);
+    setHaikuRunId(null);
+    setApolloRunId(null);
+    setExaError(null);
+    setApolloSearchError(null);
+    setHaikuError(null);
+    setApolloError(null);
   };
 
   const fetchResults = useCallback(async () => {
@@ -79,7 +113,7 @@ export default function PipelinePage() {
       if (enrichRes.ok) setEnrichResults(await enrichRes.json());
       if (companiesRes.ok) setExaCompanies(await companiesRes.json());
     } catch {
-      // ignore fetch errors during polling
+      // ignore fetch errors
     }
   }, [play]);
 
@@ -105,6 +139,14 @@ export default function PipelinePage() {
     };
   }, [play, fetchResults]);
 
+  // Refresh plays list after triggering a flow (new play may have been created)
+  const refreshPlays = () => {
+    fetch("/api/pipeline/plays")
+      .then((r) => r.ok ? r.json() : [])
+      .then(setPlays)
+      .catch(() => {});
+  };
+
   async function triggerFlow(
     endpoint: string,
     params: Record<string, unknown>,
@@ -127,6 +169,7 @@ export default function PipelinePage() {
       } else {
         setRunId(data.runId || null);
         setRunState("done");
+        refreshPlays();
       }
     } catch (err) {
       setRunState("error");
@@ -146,164 +189,207 @@ export default function PipelinePage() {
   const isAnyTriggered = exaState === "done" || apolloSearchState === "done" || haikuState === "done" || apolloState === "done";
 
   return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-bold">Pipeline</h1>
-
-      {/* Inputs */}
-      <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Search Query / Play Name</label>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => handleQueryChange(e.target.value)}
-              placeholder="small trucking company in Ohio"
-              className="w-full px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Num Results</label>
-            <input
-              type="number"
-              value={numResults}
-              onChange={(e) => setNumResults(Number(e.target.value))}
-              min={1}
-              max={100}
-              className="w-full px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
-            />
-          </div>
-          <div className="flex items-end">
+    <div className="flex gap-6 -mx-4 -my-6 min-h-[calc(100vh-4rem)]">
+      {/* Sidebar — past plays */}
+      <aside className="w-72 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-y-auto">
+        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800">
+          <h2 className="font-semibold text-sm text-zinc-500 uppercase tracking-wide">Plays</h2>
+        </div>
+        <div className="p-2">
+          <button
+            onClick={() => { setQuery(""); setPlay(""); setExaCompanies([]); setEnrichResults([]); setStepLogs([]); }}
+            className="w-full text-left px-3 py-2 rounded text-sm font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 mb-1"
+          >
+            + New Play
+          </button>
+          {plays.map((p) => (
             <button
-              onClick={fetchResults}
-              disabled={!play}
-              className="px-4 py-2 rounded text-sm font-medium border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              key={p.id}
+              onClick={() => selectPlay(p.name)}
+              className={`w-full text-left px-3 py-2.5 rounded text-sm transition-colors ${
+                play === p.name
+                  ? "bg-zinc-100 dark:bg-zinc-800 font-medium"
+                  : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+              }`}
             >
-              Refresh Results
+              <span className="block truncate">{p.name}</span>
+              <span className="text-xs text-zinc-400">{p.company_count} companies</span>
             </button>
+          ))}
+          {plays.length === 0 && (
+            <p className="px-3 py-4 text-sm text-zinc-400">No plays yet. Run Exa Search to create one.</p>
+          )}
+        </div>
+      </aside>
+
+      {/* Main content */}
+      <div className="flex-1 py-6 pr-4 space-y-8 overflow-y-auto">
+        <h1 className="text-2xl font-bold">Pipeline</h1>
+
+        {/* Inputs */}
+        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Search Query / Play Name</label>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => handleQueryChange(e.target.value)}
+                placeholder="small trucking company in Ohio"
+                className="w-full px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Num Results</label>
+              <input
+                type="number"
+                value={numResults}
+                onChange={(e) => setNumResults(Number(e.target.value))}
+                min={1}
+                max={100}
+                className="w-full px-3 py-2 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={fetchResults}
+                disabled={!play}
+                className="px-4 py-2 rounded text-sm font-medium border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Refresh Results
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* 4 Flow Buttons */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <FlowCard
-          title="1. Exa Search"
-          description="Search Exa, dedupe, scrape phones"
-          state={exaState}
-          runId={exaRunId}
-          error={exaError}
-          disabled={!query || !play || isAnyRunning}
-          onRun={runExa}
-        />
-        <FlowCard
-          title="2. Apollo People Search"
-          description="Find people at each company (free)"
-          state={apolloSearchState}
-          runId={apolloSearchRunId}
-          error={apolloSearchError}
-          disabled={!play || isAnyRunning}
-          onRun={runApolloSearch}
-        />
-        <FlowCard
-          title="3. Haiku Screen"
-          description="AI screening of each person"
-          state={haikuState}
-          runId={haikuRunId}
-          error={haikuError}
-          disabled={!play || isAnyRunning}
-          onRun={runHaiku}
-        />
-        <FlowCard
-          title="4. Apollo Enrich"
-          description="Match emails for approved people (1 credit each)"
-          state={apolloState}
-          runId={apolloRunId}
-          error={apolloError}
-          disabled={!play || isAnyRunning}
-          onRun={runApollo}
-        />
-      </div>
+        {/* 4 Flow Buttons */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <FlowCard
+            title="1. Exa Search"
+            description="Search Exa, dedupe, scrape phones"
+            state={exaState}
+            runId={exaRunId}
+            error={exaError}
+            disabled={!query || !play || isAnyRunning}
+            onRun={runExa}
+          />
+          <FlowCard
+            title="2. Apollo People Search"
+            description="Find people at each company (free)"
+            state={apolloSearchState}
+            runId={apolloSearchRunId}
+            error={apolloSearchError}
+            disabled={!play || isAnyRunning}
+            onRun={runApolloSearch}
+          />
+          <FlowCard
+            title="3. Haiku Screen"
+            description="AI screening of each person"
+            state={haikuState}
+            runId={haikuRunId}
+            error={haikuError}
+            disabled={!play || isAnyRunning}
+            onRun={runHaiku}
+          />
+          <FlowCard
+            title="4. Apollo Enrich"
+            description="Match emails for approved people (1 credit each)"
+            state={apolloState}
+            runId={apolloRunId}
+            error={apolloError}
+            disabled={!play || isAnyRunning}
+            onRun={runApollo}
+          />
+        </div>
 
-      {/* Polling indicator */}
-      {(isAnyTriggered || isAnyRunning) && (
-        <p className="text-sm text-zinc-400 flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-          Flow running on server — results will appear below as they come in
-        </p>
-      )}
+        {/* Status indicator */}
+        {(isAnyTriggered || isAnyRunning) && (
+          <p className="text-sm text-zinc-400 flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+            Flow running on server — results update in real time
+          </p>
+        )}
 
-      {/* Exa Results — companies found */}
-      {exaCompanies.length > 0 && (
-        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-          <h2 className="font-semibold mb-3">Companies ({exaCompanies.length})</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
-                  <th className="pb-2 pr-4">Company</th>
-                  <th className="pb-2 pr-4">Domain</th>
-                  <th className="pb-2 pr-4">Status</th>
-                  <th className="pb-2">Phone</th>
-                </tr>
-              </thead>
-              <tbody>
-                {exaCompanies.map((c, i) => (
-                  <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
-                    <td className="py-1.5 pr-4">{c.company_name}</td>
-                    <td className="py-1.5 pr-4 text-zinc-400">{c.domain}</td>
-                    <td className="py-1.5 pr-4">
-                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs ${
-                        c.pipeline_status === "enriched" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
-                        c.pipeline_status === "phone_scraped" ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" :
-                        "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-                      }`}>
-                        {c.pipeline_status}
-                      </span>
-                    </td>
-                    <td className="py-1.5 text-zinc-400">{c.phone_1 || "-"}</td>
+        {/* Companies table */}
+        {exaCompanies.length > 0 && (
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <h2 className="font-semibold mb-3">Companies ({exaCompanies.length})</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
+                    <th className="pb-2 pr-4">Company</th>
+                    <th className="pb-2 pr-4">Domain</th>
+                    <th className="pb-2 pr-4">Status</th>
+                    <th className="pb-2">Phone</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {exaCompanies.map((c, i) => (
+                    <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
+                      <td className="py-1.5 pr-4">{c.company_name}</td>
+                      <td className="py-1.5 pr-4 text-zinc-400">{c.domain}</td>
+                      <td className="py-1.5 pr-4">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs ${
+                          c.pipeline_status === "enriched" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
+                          c.pipeline_status === "phone_scraped" ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" :
+                          "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                        }`}>
+                          {c.pipeline_status}
+                        </span>
+                      </td>
+                      <td className="py-1.5 text-zinc-400">{c.phone_1 || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Enrichment Results */}
-      {enrichResults.length > 0 && (
-        <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-          <h2 className="font-semibold mb-3">Enrichment Results ({enrichResults.length})</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
-                  <th className="pb-2 pr-4">Company</th>
-                  <th className="pb-2 pr-4">Domain</th>
-                  <th className="pb-2 pr-4">Person</th>
-                  <th className="pb-2 pr-4">Title</th>
-                  <th className="pb-2 pr-4">Email</th>
-                  <th className="pb-2">Approved</th>
-                </tr>
-              </thead>
-              <tbody>
-                {enrichResults.slice(0, 100).map((r, i) => (
-                  <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
-                    <td className="py-1.5 pr-4">{r.company_name}</td>
-                    <td className="py-1.5 pr-4 text-zinc-400">{r.domain}</td>
-                    <td className="py-1.5 pr-4">{r.person_name || "-"}</td>
-                    <td className="py-1.5 pr-4">{r.person_title || "-"}</td>
-                    <td className="py-1.5 pr-4">{r.person_email || "-"}</td>
-                    <td className="py-1.5">
-                      {r.worth_enriching === true ? "Yes" : r.worth_enriching === false ? "No" : "-"}
-                    </td>
+        {/* Enrichment Results */}
+        {enrichResults.length > 0 && (
+          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <h2 className="font-semibold mb-3">Enrichment Results ({enrichResults.length})</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
+                    <th className="pb-2 pr-4">Company</th>
+                    <th className="pb-2 pr-4">Domain</th>
+                    <th className="pb-2 pr-4">Person</th>
+                    <th className="pb-2 pr-4">Title</th>
+                    <th className="pb-2 pr-4">Email</th>
+                    <th className="pb-2">Approved</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {enrichResults.slice(0, 100).map((r, i) => (
+                    <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
+                      <td className="py-1.5 pr-4">{r.company_name}</td>
+                      <td className="py-1.5 pr-4 text-zinc-400">{r.domain}</td>
+                      <td className="py-1.5 pr-4">{r.person_name || "-"}</td>
+                      <td className="py-1.5 pr-4">{r.person_title || "-"}</td>
+                      <td className="py-1.5 pr-4">{r.person_email || "-"}</td>
+                      <td className="py-1.5">
+                        {r.worth_enriching === true ? "Yes" : r.worth_enriching === false ? "No" : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Empty state */}
+        {!play && (
+          <div className="text-center py-16 text-zinc-400">
+            <p className="text-lg">Select a play from the sidebar or create a new one</p>
+            <p className="text-sm mt-1">Enter a search query above to start</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
