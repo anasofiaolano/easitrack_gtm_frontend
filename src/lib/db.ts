@@ -21,3 +21,8 @@ export async function queryOne<T = Record<string, unknown>>(
   const rows = await query<T>(text, params);
   return rows[0] ?? null;
 }
+
+/** Get a client from the pool for multi-statement transactions. Caller must release. */
+export async function getClient() {
+  return pool.connect();
+}
