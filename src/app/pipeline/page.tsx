@@ -275,8 +275,8 @@ export default function PipelinePage() {
             onRun={runExa}
           />
           <FlowCard
-            title="2. Apollo People Search"
-            description="Find people at each company (free)"
+            title="2. People Search (Hunter)"
+            description="Find people at each company via Hunter.io"
             state={apolloSearchState}
             runId={apolloSearchRunId}
             error={apolloSearchError}
