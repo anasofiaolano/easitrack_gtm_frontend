@@ -30,7 +30,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
         <Nav />
-        <main className="max-w-7xl mx-auto px-4 py-6 w-full">{children}</main>
+        <main className="px-6 py-6 w-full">{children}</main>
       </body>
     </html>
   );

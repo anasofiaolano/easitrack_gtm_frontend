@@ -19,6 +19,19 @@ interface StepLog {
   details: Record<string, unknown> | null;
 }
 
+interface StepSummary {
+  completed: number;
+  failed: number;
+  skipped: number;
+  total: number;
+}
+
+interface SummaryLine {
+  label: string;
+  value: number;
+  color?: "green" | "yellow" | "red" | "default";
+}
+
 interface EnrichmentResult {
   company_name: string;
   domain: string;
@@ -51,24 +64,20 @@ export default function PipelinePage() {
   const [exaState, setExaState] = useState<StepState>("idle");
   const [apolloSearchState, setApolloSearchState] = useState<StepState>("idle");
   const [haikuState, setHaikuState] = useState<StepState>("idle");
-  const [apolloState, setApolloState] = useState<StepState>("idle");
-
   const [exaRunId, setExaRunId] = useState<string | null>(null);
   const [apolloSearchRunId, setApolloSearchRunId] = useState<string | null>(null);
   const [haikuRunId, setHaikuRunId] = useState<string | null>(null);
-  const [apolloRunId, setApolloRunId] = useState<string | null>(null);
 
   const [exaError, setExaError] = useState<string | null>(null);
   const [apolloSearchError, setApolloSearchError] = useState<string | null>(null);
   const [apolloSearchForce, setApolloSearchForce] = useState(false);
   const [haikuError, setHaikuError] = useState<string | null>(null);
-  const [apolloError, setApolloError] = useState<string | null>(null);
 
   const [stepLogs, setStepLogs] = useState<StepLog[]>([]);
   const [enrichResults, setEnrichResults] = useState<EnrichmentResult[]>([]);
   const [exaCompanies, setExaCompanies] = useState<ExaCompany[]>([]);
 
-  const isAnyRunning = exaState === "running" || apolloSearchState === "running" || haikuState === "running" || apolloState === "running";
+  const isAnyRunning = exaState === "running" || apolloSearchState === "running" || haikuState === "running";
 
   // Load plays list
   useEffect(() => {
@@ -91,15 +100,12 @@ export default function PipelinePage() {
     setExaState("idle");
     setApolloSearchState("idle");
     setHaikuState("idle");
-    setApolloState("idle");
     setExaRunId(null);
     setApolloSearchRunId(null);
     setHaikuRunId(null);
-    setApolloRunId(null);
     setExaError(null);
     setApolloSearchError(null);
     setHaikuError(null);
-    setApolloError(null);
   };
 
   const fetchResults = useCallback(async () => {
@@ -181,16 +187,67 @@ export default function PipelinePage() {
   const runExa = () =>
     triggerFlow("/api/pipeline/exa", { query, play, numResults }, setExaState, setExaRunId, setExaError);
   const runApolloSearch = () =>
-    triggerFlow("/api/pipeline/apollo-search", { play, force: apolloSearchForce }, setApolloSearchState, setApolloSearchRunId, setApolloSearchError);
+    triggerFlow("/api/pipeline/people-search", { play, force: apolloSearchForce }, setApolloSearchState, setApolloSearchRunId, setApolloSearchError);
   const runHaiku = () =>
     triggerFlow("/api/pipeline/haiku", { play }, setHaikuState, setHaikuRunId, setHaikuError);
-  const runApollo = () =>
-    triggerFlow("/api/pipeline/apollo", { play }, setApolloState, setApolloRunId, setApolloError);
 
-  const isAnyTriggered = exaState === "done" || apolloSearchState === "done" || haikuState === "done" || apolloState === "done";
+  const isAnyTriggered = exaState === "done" || apolloSearchState === "done" || haikuState === "done";
+
+  // Logs are returned DESC by created_at — first entry per domain = most recent run.
+  function latestByDomain(stepName: string): Map<string, StepLog> {
+    const map = new Map<string, StepLog>();
+    for (const l of stepLogs) {
+      if (l.step !== stepName) continue;
+      const key = l.domain || l.company_name;
+      if (!map.has(key)) map.set(key, l);
+    }
+    return map;
+  }
+
+  function stepSummary(stepName: string): StepSummary | null {
+    const byDomain = latestByDomain(stepName);
+    if (byDomain.size === 0) return null;
+    const entries = Array.from(byDomain.values());
+    return {
+      completed: entries.filter((l) => l.status === "completed").length,
+      failed: entries.filter((l) => l.status === "failed").length,
+      skipped: entries.filter((l) => l.status !== "completed" && l.status !== "failed").length,
+      total: byDomain.size,
+    };
+  }
+
+  // Exa summary — uses dedup step for new/duplicate counts, domain_check for no-domain.
+  const exaSummaryLines: SummaryLine[] | null = (() => {
+    const dedupEntries = latestByDomain("dedup");
+    if (dedupEntries.size === 0) return null;
+
+    const domainCheckEntries = latestByDomain("domain_check");
+
+    let newCount = 0, dupCount = 0, noDomainCount = 0;
+    for (const l of dedupEntries.values()) {
+      const action = (l.details as Record<string, unknown>)?.action;
+      if (action === "new_company") newCount++;
+      else if (action === "matched_existing") dupCount++;
+    }
+    for (const l of domainCheckEntries.values()) {
+      if (l.status === "failed") noDomainCount++;
+    }
+
+    const found = dedupEntries.size;
+    const allGood = dupCount === 0 && noDomainCount === 0;
+    return [
+      { label: "found",     value: found,       color: "default" },
+      { label: "new",       value: newCount,     color: allGood ? "green" : "default" },
+      ...(dupCount > 0     ? [{ label: "duplicate", value: dupCount,     color: "yellow" as const }] : []),
+      ...(noDomainCount > 0 ? [{ label: "no domain", value: noDomainCount, color: "yellow" as const }] : []),
+    ];
+  })();
+
+  const peopleSummary = stepSummary("apollo_search");
+  const haikuSummary = stepSummary("haiku_screen");
 
   return (
-    <div className="flex gap-6 -mx-4 -my-6 min-h-[calc(100vh-4rem)]">
+    <div className="flex gap-6 -mx-6 -my-6 min-h-[calc(100vh-4rem)]">
       {/* Sidebar — past plays */}
       <aside className="w-72 shrink-0 border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-y-auto">
         <div className="p-4 border-b border-zinc-200 dark:border-zinc-800">
@@ -264,7 +321,7 @@ export default function PipelinePage() {
         </div>
 
         {/* 4 Flow Buttons */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <FlowCard
             title="1. Exa Search"
             description="Search Exa, dedupe, scrape phones"
@@ -273,6 +330,7 @@ export default function PipelinePage() {
             error={exaError}
             disabled={!query || !play || isAnyRunning}
             onRun={runExa}
+            summaryLines={exaSummaryLines}
           />
           <FlowCard
             title="2. People Search (Hunter)"
@@ -283,6 +341,7 @@ export default function PipelinePage() {
             disabled={!play || isAnyRunning}
             onRun={runApolloSearch}
             forceOption={{ value: apolloSearchForce, onChange: setApolloSearchForce }}
+            summary={peopleSummary}
           />
           <FlowCard
             title="3. Haiku Screen"
@@ -292,15 +351,7 @@ export default function PipelinePage() {
             error={haikuError}
             disabled={!play || isAnyRunning}
             onRun={runHaiku}
-          />
-          <FlowCard
-            title="4. Apollo Enrich"
-            description="Match emails for approved people (1 credit each)"
-            state={apolloState}
-            runId={apolloRunId}
-            error={apolloError}
-            disabled={!play || isAnyRunning}
-            onRun={runApollo}
+            summary={haikuSummary}
           />
         </div>
 
@@ -312,7 +363,7 @@ export default function PipelinePage() {
           </p>
         )}
 
-        {/* Companies table */}
+        {/* Merged companies + people table */}
         {exaCompanies.length > 0 && (
           <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
             <h2 className="font-semibold mb-3">Companies ({exaCompanies.length})</h2>
@@ -320,64 +371,79 @@ export default function PipelinePage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
-                    <th className="pb-2 pr-4">Company</th>
-                    <th className="pb-2 pr-4">Domain</th>
-                    <th className="pb-2 pr-4">Status</th>
-                    <th className="pb-2">Phone</th>
+                    <th className="pb-2 pr-4 font-medium">Company</th>
+                    <th className="pb-2 pr-4 font-medium">Domain</th>
+                    <th className="pb-2 pr-4 font-medium">Status</th>
+                    <th className="pb-2 pr-4 font-medium">Phone</th>
+                    <th className="pb-2 pr-4 font-medium">Person</th>
+                    <th className="pb-2 pr-4 font-medium">Title</th>
+                    <th className="pb-2 pr-4 font-medium">Email</th>
+                    <th className="pb-2 font-medium">Approved</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {exaCompanies.map((c, i) => (
-                    <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
-                      <td className="py-1.5 pr-4">{c.company_name}</td>
-                      <td className="py-1.5 pr-4 text-zinc-400">{c.domain}</td>
-                      <td className="py-1.5 pr-4">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-xs ${
-                          c.pipeline_status === "enriched" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
-                          c.pipeline_status === "phone_scraped" ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" :
-                          "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-                        }`}>
-                          {c.pipeline_status}
-                        </span>
-                      </td>
-                      <td className="py-1.5 text-zinc-400">{c.phone_1 || "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+                  {exaCompanies.map((c, ci) => {
+                    const people = enrichResults.filter(
+                      (r) => r.domain === c.domain && r.person_name
+                    );
+                    const rowBg = ci % 2 === 0 ? "" : "bg-zinc-50 dark:bg-zinc-800/30";
+                    const statusBadge = (
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-xs ${
+                        c.pipeline_status === "enriched" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
+                        c.pipeline_status === "phone_scraped" ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" :
+                        "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                      }`}>
+                        {c.pipeline_status}
+                      </span>
+                    );
 
-        {/* Enrichment Results */}
-        {enrichResults.length > 0 && (
-          <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-            <h2 className="font-semibold mb-3">Enrichment Results ({enrichResults.length})</h2>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-zinc-500 border-b border-zinc-200 dark:border-zinc-700">
-                    <th className="pb-2 pr-4">Company</th>
-                    <th className="pb-2 pr-4">Domain</th>
-                    <th className="pb-2 pr-4">Person</th>
-                    <th className="pb-2 pr-4">Title</th>
-                    <th className="pb-2 pr-4">Email</th>
-                    <th className="pb-2">Approved</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {enrichResults.slice(0, 100).map((r, i) => (
-                    <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
-                      <td className="py-1.5 pr-4">{r.company_name}</td>
-                      <td className="py-1.5 pr-4 text-zinc-400">{r.domain}</td>
-                      <td className="py-1.5 pr-4">{r.person_name || "-"}</td>
-                      <td className="py-1.5 pr-4">{r.person_title || "-"}</td>
-                      <td className="py-1.5 pr-4">{r.person_email || "-"}</td>
-                      <td className="py-1.5">
-                        {r.worth_enriching === true ? "Yes" : r.worth_enriching === false ? "No" : "-"}
-                      </td>
-                    </tr>
-                  ))}
+                    if (people.length === 0) {
+                      return (
+                        <tr key={c.domain} className={`border-b border-zinc-100 dark:border-zinc-800 ${rowBg}`}>
+                          <td className="py-1.5 pr-4 font-medium">{c.company_name}</td>
+                          <td className="py-1.5 pr-4 text-zinc-400">{c.domain}</td>
+                          <td className="py-1.5 pr-4">{statusBadge}</td>
+                          <td className="py-1.5 pr-4 text-zinc-400">{c.phone_1 || "-"}</td>
+                          <td className="py-1.5 pr-4 text-zinc-300 dark:text-zinc-600">-</td>
+                          <td className="py-1.5 pr-4 text-zinc-300 dark:text-zinc-600">-</td>
+                          <td className="py-1.5 pr-4 text-zinc-300 dark:text-zinc-600">-</td>
+                          <td className="py-1.5 text-zinc-300 dark:text-zinc-600">-</td>
+                        </tr>
+                      );
+                    }
+
+                    return people.map((person, pi) => (
+                      <tr key={`${c.domain}-${pi}`} className={`border-b border-zinc-100 dark:border-zinc-800 ${rowBg}`}>
+                        {/* Company columns — only on first person row */}
+                        {pi === 0 ? (
+                          <>
+                            <td className="py-1.5 pr-4 font-medium align-top">{c.company_name}</td>
+                            <td className="py-1.5 pr-4 text-zinc-400 align-top">{c.domain}</td>
+                            <td className="py-1.5 pr-4 align-top">{statusBadge}</td>
+                            <td className="py-1.5 pr-4 text-zinc-400 align-top">{c.phone_1 || "-"}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="py-1.5 pr-4" />
+                            <td className="py-1.5 pr-4" />
+                            <td className="py-1.5 pr-4" />
+                            <td className="py-1.5 pr-4" />
+                          </>
+                        )}
+                        {/* Person columns */}
+                        <td className="py-1.5 pr-4">{person.person_name}</td>
+                        <td className="py-1.5 pr-4 text-zinc-500">{person.person_title || "-"}</td>
+                        <td className="py-1.5 pr-4 text-blue-600 dark:text-blue-400">{person.person_email || "-"}</td>
+                        <td className="py-1.5">
+                          {person.worth_enriching === true
+                            ? <span className="text-green-600 dark:text-green-400 font-medium">Yes</span>
+                            : person.worth_enriching === false
+                            ? <span className="text-zinc-400">No</span>
+                            : <span className="text-zinc-300 dark:text-zinc-600">-</span>}
+                        </td>
+                      </tr>
+                    ));
+                  })}
                 </tbody>
               </table>
             </div>
@@ -405,6 +471,8 @@ function FlowCard({
   disabled,
   onRun,
   forceOption,
+  summary,
+  summaryLines,
 }: {
   title: string;
   description: string;
@@ -414,13 +482,67 @@ function FlowCard({
   disabled: boolean;
   onRun: () => void;
   forceOption?: { value: boolean; onChange: (v: boolean) => void };
+  summary?: StepSummary | null;
+  summaryLines?: SummaryLine[] | null;
 }) {
+  const allDone = summary && summary.failed === 0 && summary.skipped === 0 && summary.completed === summary.total;
+  const hasFailed = summary && summary.failed > 0;
+  const hasSkipped = summary && summary.skipped > 0;
+
+  const colorClass = (color: SummaryLine["color"]) => {
+    if (color === "green")  return "text-green-700 dark:text-green-400";
+    if (color === "yellow") return "text-yellow-600 dark:text-yellow-400";
+    if (color === "red")    return "text-red-500";
+    return "text-zinc-500 dark:text-zinc-400";
+  };
+
+  const hasProblemLines = summaryLines?.some((l) => l.color === "yellow" || l.color === "red");
+
   return (
     <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 flex flex-col gap-3">
       <div>
         <h3 className="font-semibold">{title}</h3>
         <p className="text-sm text-zinc-500">{description}</p>
       </div>
+
+      {/* Custom summary lines (e.g. Exa breakdown) */}
+      {summaryLines && (
+        <div className={`text-xs rounded px-2 py-1.5 space-y-0.5 ${
+          hasProblemLines ? "bg-yellow-50 dark:bg-yellow-900/10" : "bg-green-50 dark:bg-green-900/20"
+        }`}>
+          <div className={`font-medium mb-1 ${hasProblemLines ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"}`}>
+            {hasProblemLines ? "⚠ Done with issues" : "✓ Done"}
+          </div>
+          {summaryLines.map((line) => (
+            <div key={line.label} className="flex justify-between">
+              <span className="text-zinc-400">{line.label}</span>
+              <span className={`font-medium ${colorClass(line.color)}`}>{line.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Generic summary (people search, haiku) */}
+      {summary && !summaryLines && (
+        <div className={`text-xs rounded px-2 py-1.5 space-y-0.5 ${
+          allDone ? "bg-green-50 dark:bg-green-900/20" :
+          hasFailed ? "bg-red-50 dark:bg-red-900/20" :
+          "bg-zinc-50 dark:bg-zinc-800/50"
+        }`}>
+          <div className={`font-medium flex items-center gap-1 ${
+            allDone ? "text-green-700 dark:text-green-400" :
+            hasFailed ? "text-red-600 dark:text-red-400" :
+            "text-zinc-600 dark:text-zinc-400"
+          }`}>
+            {allDone ? "✓ Done" : hasFailed ? "⚠ Partial" : "In progress"}
+            <span className="font-normal text-zinc-400 ml-1">
+              {summary.completed}/{summary.total} completed
+            </span>
+          </div>
+          {hasFailed && <div className="text-red-500">{summary.failed} failed</div>}
+          {hasSkipped && <div className="text-yellow-600 dark:text-yellow-400">{summary.skipped} skipped</div>}
+        </div>
+      )}
 
       {forceOption && (
         <label className="flex items-center gap-2 text-xs text-zinc-500 cursor-pointer">

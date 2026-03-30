@@ -27,9 +27,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "PREFECT_API_URL not configured" }, { status: 500 });
   }
 
-  const depId = await getDeploymentId("apollo-search");
+  const depId = await getDeploymentId("people-search");
   if (!depId) {
-    return NextResponse.json({ error: "apollo-search deployment not found" }, { status: 500 });
+    return NextResponse.json({ error: "people-search deployment not found" }, { status: 500 });
   }
 
   try {
